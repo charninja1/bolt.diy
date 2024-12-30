@@ -1,5 +1,4 @@
 import { convertToCoreMessages, streamText as _streamText } from 'ai';
-import { getModel } from '~/lib/.server/llm/model';
 import { MAX_TOKENS } from './constants';
 import { getSystemPrompt } from '~/lib/common/prompts/prompts';
 import {
@@ -8,6 +7,7 @@ import {
   getModelList,
   MODEL_REGEX,
   MODIFICATIONS_TAG_NAME,
+  PROVIDER_LIST,
   PROVIDER_REGEX,
   WORK_DIR,
 } from '~/utils/constants';
@@ -150,8 +150,9 @@ export async function streamText(props: {
   files?: FileMap;
   providerSettings?: Record<string, IProviderSetting>;
   promptId?: string;
+  contextOptimization?: boolean;
 }) {
-  const { messages, env: serverEnv, options, apiKeys, files, providerSettings, promptId } = props;
+  const { messages, env: serverEnv, options, apiKeys, files, providerSettings, promptId, contextOptimization } = props;
 
   // console.log({serverEnv});
 
@@ -170,9 +171,11 @@ export async function streamText(props: {
 
       return { ...message, content };
     } else if (message.role == 'assistant') {
-      const content = message.content;
+      let content = message.content;
 
-      // content = simplifyBoltActions(content);
+      if (contextOptimization) {
+        content = simplifyBoltActions(content);
+      }
 
       return { ...message, content };
     }
@@ -184,22 +187,27 @@ export async function streamText(props: {
 
   const dynamicMaxTokens = modelDetails && modelDetails.maxTokenAllowed ? modelDetails.maxTokenAllowed : MAX_TOKENS;
 
+  const provider = PROVIDER_LIST.find((p) => p.name === currentProvider) || DEFAULT_PROVIDER;
+
   let systemPrompt =
     PromptLibrary.getPropmtFromLibrary(promptId || 'default', {
       cwd: WORK_DIR,
       allowedHtmlElements: allowedHTMLElements,
       modificationTagName: MODIFICATIONS_TAG_NAME,
     }) ?? getSystemPrompt();
-  let codeContext = '';
 
-  if (files) {
-    codeContext = createFilesContext(files);
-    codeContext = '';
+  if (files && contextOptimization) {
+    const codeContext = createFilesContext(files);
     systemPrompt = `${systemPrompt}\n\n ${codeContext}`;
   }
 
   return _streamText({
-    model: getModel(currentProvider, currentModel, serverEnv, apiKeys, providerSettings) as any,
+    model: provider.getModelInstance({
+      model: currentModel,
+      serverEnv,
+      apiKeys,
+      providerSettings,
+    }),
     system: systemPrompt,
     maxTokens: dynamicMaxTokens,
     messages: convertToCoreMessages(processedMessages as any),
